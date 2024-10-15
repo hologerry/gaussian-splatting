@@ -32,9 +32,6 @@ class Scene:
         shuffle=True,
         resolution_scales=[1.0],
     ):
-        """b
-        :param path: Path to colmap scene main folder.
-        """
         self.model_path = args.model_path
         self.loaded_iter = None
         self.gaussians = gaussians
@@ -58,6 +55,15 @@ class Scene:
             print("Found transforms_train_hyfluid.json file, assuming HyFluid data set!")
             scene_info = sceneLoadTypeCallbacks["HyFluid"](
                 args.source_path, args.white_background, args.eval, frame_idx=args.hyfluid_frame_idx
+            )
+        elif os.path.exists(os.path.join(args.source_path, "transforms_aligned_train.json")):
+            print("Found transforms_aligned_train.json file, assuming RealCapture data set!")
+            scene_info = sceneLoadTypeCallbacks["RealCapture"](
+                args.source_path,
+                args.white_background,
+                args.eval,
+                frame_idx=args.real_capture_frame_idx,
+                all_cam=args.real_capture_all_cam,
             )
 
         else:
@@ -98,13 +104,13 @@ class Scene:
 
         if self.loaded_iter:
             self.gaussians.load_ply(
-                os.path.join(self.model_path, "point_cloud", "iteration_" + str(self.loaded_iter), "point_cloud.ply")
+                os.path.join(self.model_path, "point_cloud", f"iteration_{self.loaded_iter}", "point_cloud.ply")
             )
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
 
     def save(self, iteration):
-        point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
+        point_cloud_path = os.path.join(self.model_path, f"point_cloud/iteration_{iteration}")
         self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
 
     def getTrainCameras(self, scale=1.0):

@@ -322,63 +322,59 @@ def readCamerasFromTransformsHyFluid(path, transformsfile, white_background, ext
     with open(os.path.join(path, transformsfile)) as json_file:
         contents = json.load(json_file)
 
-        voxel_scale = np.array(contents["voxel_scale"])
-        voxel_scale = np.broadcast_to(voxel_scale, [3])
+    voxel_scale = np.array(contents["voxel_scale"])
+    voxel_scale = np.broadcast_to(voxel_scale, [3])
 
-        voxel_matrix = np.array(contents["voxel_matrix"])
-        voxel_matrix = np.stack(
-            [voxel_matrix[:, 2], voxel_matrix[:, 1], voxel_matrix[:, 0], voxel_matrix[:, 3]], axis=1
-        )
-        # points are in OpenGL coordinate system, but the camera is in colmap coordinate system
-        # voxel_matrix[:3, 1:3] *= -1
-        voxel_matrix_inv = np.linalg.inv(voxel_matrix)
-        bbox_model = BBoxTool(voxel_matrix_inv, voxel_scale)
+    voxel_matrix = np.array(contents["voxel_matrix"])
+    voxel_matrix = np.stack([voxel_matrix[:, 2], voxel_matrix[:, 1], voxel_matrix[:, 0], voxel_matrix[:, 3]], axis=1)
+    # points are in OpenGL coordinate system, but the camera is in colmap coordinate system
+    # voxel_matrix[:3, 1:3] *= -1
+    voxel_matrix_inv = np.linalg.inv(voxel_matrix)
+    bbox_model = BBoxTool(voxel_matrix_inv, voxel_scale)
 
-        frames = contents["frames"]
-        for idx, frame in enumerate(frames):
-            cam_name = os.path.join(path, "colmap_frames", f"colmap_{frame_idx}", frame["file_path"] + extension)
+    frames = contents["frames"]
+    for idx, frame in enumerate(frames):
+        # NeRF 'transform_matrix' is a camera-to-world transform
+        c2w = np.array(frame["transform_matrix"])
+        # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
+        c2w[:3, 1:3] *= -1
 
-            # NeRF 'transform_matrix' is a camera-to-world transform
-            c2w = np.array(frame["transform_matrix"])
-            # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
-            c2w[:3, 1:3] *= -1
+        # get the world-to-camera transform and set R, T
+        w2c = np.linalg.inv(c2w)
+        R = np.transpose(w2c[:3, :3])  # R is stored transposed due to 'glm' in CUDA code
+        T = w2c[:3, 3]
 
-            # get the world-to-camera transform and set R, T
-            w2c = np.linalg.inv(c2w)
-            R = np.transpose(w2c[:3, :3])  # R is stored transposed due to 'glm' in CUDA code
-            T = w2c[:3, 3]
+        image_path = os.path.join(path, "colmap_frames", f"colmap_{frame_idx}", frame["file_path"] + extension)
+        image_name = Path(image_path).stem
+        image = Image.open(image_path)
 
-            image_path = os.path.join(path, cam_name)
-            image_name = Path(cam_name).stem
-            image = Image.open(image_path)
+        im_data = np.array(image.convert("RGBA"))
 
-            im_data = np.array(image.convert("RGBA"))
+        bg = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
 
-            bg = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
+        norm_data = im_data / 255.0
+        arr = norm_data[:, :, :3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
+        image = Image.fromarray(np.array(arr * 255.0, dtype=np.byte), "RGB")
 
-            norm_data = im_data / 255.0
-            arr = norm_data[:, :, :3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
-            image = Image.fromarray(np.array(arr * 255.0, dtype=np.byte), "RGB")
+        fovx = frame["camera_angle_x"]
+        fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
+        FovY = fovy
+        FovX = fovx
 
-            fovx = frame["camera_angle_x"]
-            fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
-            FovY = fovy
-            FovX = fovx
-
-            cam_infos.append(
-                CameraInfo(
-                    uid=idx,
-                    R=R,
-                    T=T,
-                    FovY=FovY,
-                    FovX=FovX,
-                    image=image,
-                    image_path=image_path,
-                    image_name=image_name,
-                    width=image.size[0],
-                    height=image.size[1],
-                )
+        cam_infos.append(
+            CameraInfo(
+                uid=idx,
+                R=R,
+                T=T,
+                FovY=FovY,
+                FovX=FovX,
+                image=image,
+                image_path=image_path,
+                image_name=image_name,
+                width=image.size[0],
+                height=image.size[1],
             )
+        )
 
     return cam_infos, bbox_model
 
@@ -452,8 +448,151 @@ def readNerfSyntheticInfoHyFluid(path, white_background, eval, extension=".png",
     return scene_info
 
 
+def readCamerasFromTransformsRealCapture(path, transformsfile, white_background, extension=".png", frame_idx=0):
+    cam_infos = []
+
+    with open(os.path.join(path, transformsfile)) as json_file:
+        contents = json.load(json_file)
+
+    def rotate_camera_around_optical_axis(C2W, theta):
+        # Rotation matrix around Z-axis
+        cos_theta = np.cos(theta)
+        sin_theta = np.sin(theta)
+        R_roll = np.array([[cos_theta, -sin_theta, 0, 0], [sin_theta, cos_theta, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+
+        # Update camera-to-world matrix
+        C2W_new = np.dot(C2W, R_roll)
+        return C2W_new
+
+    frames = contents["frames"]
+    for idx, frame in enumerate(frames):
+        cam_name = frame["file_path"][-1]
+        # frame["file_path"]: camera00~camera04
+
+        # NeRF 'transform_matrix' is a camera-to-world transform
+        c2w = np.array(frame["transform_matrix"])
+        # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
+        c2w[:3, 1:3] *= -1
+
+        #### real_capture_black hacks
+        if cam_name == "0":
+            degree = np.deg2rad(4)
+            c2w = rotate_camera_around_optical_axis(c2w, degree)
+        elif cam_name == "1":
+            degree = np.deg2rad(2)
+            c2w = rotate_camera_around_optical_axis(c2w, degree)
+        elif cam_name == "3":
+            degree = np.deg2rad(-3)
+            c2w = rotate_camera_around_optical_axis(c2w, degree)
+        elif cam_name == "4":
+            degree = np.deg2rad(-3)
+            c2w = rotate_camera_around_optical_axis(c2w, degree)
+
+        # get the world-to-camera transform and set R, T
+        w2c = np.linalg.inv(c2w)
+        R = np.transpose(w2c[:3, :3])  # R is stored transposed due to 'glm' in CUDA code
+        T = w2c[:3, 3]
+
+        image_name = f"{frame['file_path']}_{frame_idx:03d}"
+        image_path = os.path.join(path, frame["file_path"], f"{frame_idx:03d}" + extension)
+        image = Image.open(image_path)
+
+        im_data = np.array(image.convert("RGBA"))
+
+        bg = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
+
+        norm_data = im_data / 255.0
+        arr = norm_data[:, :, :3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
+        image = Image.fromarray(np.array(arr * 255.0, dtype=np.byte), "RGB")
+
+        fovx = frame["camera_angle_x"]
+        fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
+        FovY = fovy
+        FovX = fovx
+
+        cam_infos.append(
+            CameraInfo(
+                uid=idx,
+                R=R,
+                T=T,
+                FovY=FovY,
+                FovX=FovX,
+                image=image,
+                image_path=image_path,
+                image_name=image_name,
+                width=image.size[0],
+                height=image.size[1],
+            )
+        )
+
+    return cam_infos
+
+
+def readNerfSyntheticInfoRealCapture(path, white_background, eval, extension=".png", frame_idx=0, all_cam=False):
+    print("Reading Training Transforms")
+    train_json = "transforms_aligned_train.json"
+    if all_cam:
+        train_json = "transforms_aligned.json"
+        print("Reading All Transforms")
+    train_cam_infos = readCamerasFromTransformsRealCapture(path, train_json, white_background, extension, frame_idx)
+    print("Reading Test Transforms")
+    test_cam_infos = readCamerasFromTransformsRealCapture(
+        path, "transforms_aligned_test.json", white_background, extension, frame_idx
+    )
+
+    if not eval:
+        train_cam_infos.extend(test_cam_infos)
+        test_cam_infos = []
+
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+
+    ply_path = os.path.join(path, "points3d.ply")
+    # if not os.path.exists(ply_path):
+    # Since this data set has no colmap data, we start with random points
+    # hyfluid recreate the points every time
+    num_pts = 100_000
+    print(f"Generating random point cloud ({num_pts})...")
+
+    x_min = -0.5
+    x_max = 2.5
+    y_min = -0.2
+    y_max = 2.5
+    z_plane = -0.43
+
+    x = np.random.uniform(x_min, x_max, (num_pts, 1))
+    y = np.random.uniform(y_min, y_max, (num_pts, 1))
+    z = np.ones((num_pts, 1)) * z_plane + np.random.random((num_pts, 1)) * 0.01
+
+    print(f"Points init x: {x.min()}, {x.max()}")
+    print(f"Points init y: {y.min()}, {y.max()}")
+    print(f"Points init z: {z.min()}, {z.max()}")
+
+    xyz = np.concatenate((x, y, z), axis=1)
+
+    shs = np.random.random((num_pts, 3)) / 255.0
+    pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+
+    storePly(ply_path, xyz, SH2RGB(shs) * 255)
+
+    try:
+        pcd = fetchPly(ply_path)
+    except:
+        pcd = None
+
+    scene_info = SceneInfo(
+        point_cloud=pcd,
+        train_cameras=train_cam_infos,
+        test_cameras=test_cam_infos,
+        nerf_normalization=nerf_normalization,
+        ply_path=ply_path,
+        bbox_model=None,
+    )
+    return scene_info
+
+
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
     "Blender": readNerfSyntheticInfo,
     "HyFluid": readNerfSyntheticInfoHyFluid,
+    "RealCapture": readNerfSyntheticInfoRealCapture,
 }

@@ -41,7 +41,7 @@ except ImportError:
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
-    tb_writer = prepare_output_and_logger(dataset)
+    tb_writer, rendering_folder = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
@@ -57,7 +57,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         viewpoint_stack = scene.getTrainCameras().copy()
         for viewpoint in viewpoint_stack:
             initial_image = render(viewpoint, gaussians, pipe, background)["render"]
-            save_image(initial_image, os.path.join(scene.model_path, f"initial_render_{viewpoint.image_name}.png"))
+            save_image(
+                initial_image,
+                os.path.join(rendering_folder, f"initial_render_{viewpoint.image_name}.png"),
+            )
 
             W2C = getWorld2View(viewpoint.R, viewpoint.T)
             C2W = np.linalg.inv(W2C)  # this cam2world is COLMAP convention
@@ -81,34 +84,34 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # print(f"Initial XYZ min: {xyz_min}, max: {xyz_max}")
 
     for iteration in range(first_iter, opt.iterations + 1):
-        if network_gui.conn == None:
-            network_gui.try_connect()
-        while network_gui.conn != None:
-            try:
-                net_image_bytes = None
-                (
-                    custom_cam,
-                    do_training,
-                    pipe.convert_SHs_python,
-                    pipe.compute_cov3D_python,
-                    keep_alive,
-                    scaling_modifier,
-                ) = network_gui.receive()
-                if custom_cam != None:
-                    net_image = render(custom_cam, gaussians, pipe, background, scaling_modifier)["render"]
-                    net_image_bytes = memoryview(
-                        (torch.clamp(net_image, min=0, max=1.0) * 255)
-                        .byte()
-                        .permute(1, 2, 0)
-                        .contiguous()
-                        .cpu()
-                        .numpy()
-                    )
-                network_gui.send(net_image_bytes, dataset.source_path)
-                if do_training and ((iteration < int(opt.iterations)) or not keep_alive):
-                    break
-            except Exception as e:
-                network_gui.conn = None
+        # if network_gui.conn == None:
+        #     network_gui.try_connect()
+        # while network_gui.conn != None:
+        #     try:
+        #         net_image_bytes = None
+        #         (
+        #             custom_cam,
+        #             do_training,
+        #             pipe.convert_SHs_python,
+        #             pipe.compute_cov3D_python,
+        #             keep_alive,
+        #             scaling_modifier,
+        #         ) = network_gui.receive()
+        #         if custom_cam != None:
+        #             net_image = render(custom_cam, gaussians, pipe, background, scaling_modifier)["render"]
+        #             net_image_bytes = memoryview(
+        #                 (torch.clamp(net_image, min=0, max=1.0) * 255)
+        #                 .byte()
+        #                 .permute(1, 2, 0)
+        #                 .contiguous()
+        #                 .cpu()
+        #                 .numpy()
+        #             )
+        #         network_gui.send(net_image_bytes, dataset.source_path)
+        #         if do_training and ((iteration < int(opt.iterations)) or not keep_alive):
+        #             break
+        #     except Exception as e:
+        #         network_gui.conn = None
 
         iter_start.record()
 
@@ -145,8 +148,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
         if iteration % 50 == 0:
-            save_image(image, os.path.join(scene.model_path, f"render_{viewpoint_cam.image_name}_{iteration:05d}.png"))
-            save_image(gt_image, os.path.join(scene.model_path, f"gt_{viewpoint_cam.image_name}_{iteration:05d}.png"))
+            save_image(
+                image,
+                os.path.join(rendering_folder, f"render_{viewpoint_cam.image_name}_{iteration:05d}.png"),
+            )
+            save_image(
+                gt_image,
+                os.path.join(rendering_folder, f"gt_{viewpoint_cam.image_name}_{iteration:05d}.png"),
+            )
             # current_xyz = gaussians.get_xyz
             # xyz_min = torch.min(current_xyz, dim=0).values
             # xyz_max = torch.max(current_xyz, dim=0).values
@@ -162,7 +171,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}", "Points": gaussians.get_xyz.shape[0]})
+                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.7f}", "Points": gaussians.get_xyz.shape[0]})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -178,6 +187,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 testing_iterations,
                 scene,
                 render,
+                rendering_folder,
                 (pipe, background),
             )
             if iteration in saving_iterations:
@@ -228,8 +238,10 @@ def prepare_output_and_logger(args):
         args.model_path = os.path.join("./output/", unique_str[0:10])
 
     # Set up output folder
-    print("Output folder: {}".format(args.model_path))
+    print(f"Output folder: {args.model_path}")
     os.makedirs(args.model_path, exist_ok=True)
+    rendering_folder = os.path.join(args.model_path, "rendering")
+    os.makedirs(rendering_folder, exist_ok=True)
     with open(os.path.join(args.model_path, "cfg_args"), "w") as cfg_log_f:
         cfg_log_f.write(str(Namespace(**vars(args))))
 
@@ -239,7 +251,7 @@ def prepare_output_and_logger(args):
         tb_writer = SummaryWriter(args.model_path)
     else:
         print("Tensorboard not available: not logging progress")
-    return tb_writer
+    return tb_writer, rendering_folder
 
 
 def training_report(
@@ -252,6 +264,7 @@ def training_report(
     testing_iterations,
     scene: Scene,
     renderFunc,
+    rendering_folder,
     renderArgs,
 ):
     if tb_writer:
@@ -264,10 +277,11 @@ def training_report(
         torch.cuda.empty_cache()
         validation_configs = (
             {"name": "test", "cameras": scene.getTestCameras()},
-            {
-                "name": "train",
-                "cameras": [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)],
-            },
+            {"name": "train", "cameras": scene.getTrainCameras()},
+            # {
+            #     "name": "train",
+            #     "cameras": [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)],
+            # },
         )
 
         for config in validation_configs:
@@ -277,23 +291,22 @@ def training_report(
                 for idx, viewpoint in enumerate(config["cameras"]):
                     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
-                    save_image(
-                        image,
-                        os.path.join(scene.model_path, f"test_render_{viewpoint.image_name}_{iteration:05d}.png"),
+                    render_img_path = os.path.join(
+                        rendering_folder, f"test_render_{viewpoint.image_name}_{iteration:05d}.png"
                     )
-                    save_image(
-                        gt_image, os.path.join(scene.model_path, f"test_gt_{viewpoint.image_name}_{iteration:05d}.png")
-                    )
+                    gt_img_path = os.path.join(rendering_folder, f"test_gt_{viewpoint.image_name}_{iteration:05d}.png")
+                    save_image(image, render_img_path)
+                    save_image(gt_image, gt_img_path)
 
                     if tb_writer and (idx < 5):
                         tb_writer.add_images(
-                            config["name"] + "_view_{}/render".format(viewpoint.image_name),
+                            config["name"] + f"_view_{viewpoint.image_name}/render",
                             image[None],
                             global_step=iteration,
                         )
                         if iteration == testing_iterations[0]:
                             tb_writer.add_images(
-                                config["name"] + "_view_{}/ground_truth".format(viewpoint.image_name),
+                                config["name"] + f"_view_{viewpoint.image_name}/ground_truth",
                                 gt_image[None],
                                 global_step=iteration,
                             )
@@ -301,7 +314,7 @@ def training_report(
                     psnr_test += psnr(image, gt_image).mean().double()
                 psnr_test /= len(config["cameras"])
                 l1_test /= len(config["cameras"])
-                print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config["name"], l1_test, psnr_test))
+                print(f"[ITER {iteration}] Evaluating {config["name"]}: L1 {l1_test} PSNR {psnr_test}")
                 if tb_writer:
                     tb_writer.add_scalar(config["name"] + "/loss_viewpoint - l1_loss", l1_test, iteration)
                     tb_writer.add_scalar(config["name"] + "/loss_viewpoint - psnr", psnr_test, iteration)
@@ -322,8 +335,8 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=6009)
     parser.add_argument("--debug_from", type=int, default=-1)
     parser.add_argument("--detect_anomaly", action="store_true", default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1, 10, 100, 200, 500, 1000, 7_000, 15_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1, 10, 100, 200, 500, 1000, 7_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1, 500, 1000, 7_000, 15_000, 30_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1, 500, 1000, 7_000, 15_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default=None)
@@ -336,7 +349,7 @@ if __name__ == "__main__":
     safe_state(args.quiet)
 
     # Start GUI server, configure and run training
-    network_gui.init(args.ip, args.port)
+    # network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(
         lp.extract(args),
