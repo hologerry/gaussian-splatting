@@ -144,7 +144,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
-        if iteration % 500 == 0:
+        if iteration % 50 == 0:
             save_image(image, os.path.join(scene.model_path, f"render_{viewpoint_cam.image_name}_{iteration:05d}.png"))
             save_image(gt_image, os.path.join(scene.model_path, f"gt_{viewpoint_cam.image_name}_{iteration:05d}.png"))
             # current_xyz = gaussians.get_xyz
@@ -162,7 +162,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
+                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}", "Points": gaussians.get_xyz.shape[0]})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -322,8 +322,8 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=6009)
     parser.add_argument("--debug_from", type=int, default=-1)
     parser.add_argument("--detect_anomaly", action="store_true", default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 15_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1, 10, 100, 200, 7_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1, 10, 100, 200, 500, 1000, 7_000, 15_000, 30_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1, 10, 100, 200, 500, 1000, 7_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default=None)

@@ -403,7 +403,7 @@ def readNerfSyntheticInfoHyFluid(path, white_background, eval, extension=".png",
     # if not os.path.exists(ply_path):
     # Since this data set has no colmap data, we start with random points
     # hyfluid recreate the points every time
-    num_pts = 100_000
+    num_pts = 1  # 100_000
     print(f"Generating random point cloud ({num_pts})...")
 
     # We create random points inside the bounds of the synthetic Blender scenes
@@ -412,16 +412,19 @@ def readNerfSyntheticInfoHyFluid(path, white_background, eval, extension=".png",
     # points are in OpenGL coordinate system, but the camera is in colmap coordinate system
     # this is just OpenGL coordinate system, but it works, although the camera has to convert from OpenGL to colmap
     # x = np.random.random((num_pts, 1)) * 0.35 + 0.15  # [0.15, 0.5]
-    x_mid = 0.325
+    radius = 0.02  # default value 0.18  source region 0.02
+    x_mid = 0.34  # default value 0.325  source region 0.34
+    y_min = -0.01  # default value -0.05  source region -0.01
+    y_max = 0.02  # default value 0.7  source region 0.05
+    z_mid = -0.225  # default value -0.25  source region -0.225
 
-    y = np.random.random((num_pts, 1)) * 0.75 - 0.05  # [-0.05, 0.7]
-    # z = -np.random.random((num_pts, 1)) * 0.5 - 0.08  # [-0.08, -0.42]
-    z_mid = -0.25
+    y = np.random.uniform(y_min, y_max, (num_pts, 1))  # [-0.05, 0.15] [-0.05, 0.7]
 
-    radius = np.random.random((num_pts, 1)) * 0.18
+    radius = np.random.random((num_pts, 1)) * radius  # * 0.03 # 0.18
     theta = np.random.random((num_pts, 1)) * 2 * np.pi
     x = radius * np.cos(theta) + x_mid
     z = radius * np.sin(theta) + z_mid
+
     print(f"Points init x: {x.min()}, {x.max()}")
     print(f"Points init y: {y.min()}, {y.max()}")
     print(f"Points init z: {z.min()}, {z.max()}")

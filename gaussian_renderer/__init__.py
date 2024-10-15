@@ -23,7 +23,12 @@ from utils.sh_utils import eval_sh
 
 
 def render(
-    viewpoint_camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, scaling_modifier=1.0, override_color=None
+    viewpoint_camera,
+    pc: GaussianModel,
+    pipe,
+    bg_color: torch.Tensor,
+    scaling_modifier=1.0,
+    override_color=None,
 ):
     """
     Render the scene.
