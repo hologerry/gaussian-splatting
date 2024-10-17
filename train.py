@@ -12,6 +12,8 @@
 import os
 import sys
 import uuid
+import time
+import lovely_tensors as lt
 
 from argparse import ArgumentParser, Namespace
 from random import randint
@@ -327,6 +329,7 @@ def training_report(
 
 if __name__ == "__main__":
     # Set up command line argument parser
+    lt.monkey_patch()
     parser = ArgumentParser(description="Training script parameters")
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
